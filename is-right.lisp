@@ -63,19 +63,21 @@
                   :reader complete-test))
   (:documentation "error which is thrown when a test fails to execute"))
 
-(define-condition failed-is-test (failed-test)
-  ((explenation :initform "a form containing 'is failed to return a non-nil value."))
-  (:documentation "error which is thrown when an is-test failed to return a non-nil value."))
-
 (defmethod print-object ((object failed-test) stream)
   (print-unreadable-object (object stream)
     (format stream "~& Explenation: ~A~& Test: ~A~& Complete test: ~A~&" (explenation object) (test-form object) (complete-test object))))
+
+(define-condition failed-is-test (failed-test)
+  ((explenation :initform "a form containing 'is failed to return a non-nil value."))
+  (:documentation "error which is thrown when an is-test failed to return a non-nil value."))
 
 (defvar *complete-test* nil
   "contains the complete form which is currently being tested")
 
 (defmacro is (form)
-  "verifies that form returns a non-nil value."
+  "verifies that form returns a non-nil value.
+
+   the implementation of this macro is shadowed in is-right*"
   `(unless ,form
      (error 'failed-is-test
             :test (quote ,form)
@@ -85,6 +87,30 @@
   "executes a single test"
   (let ((*complete-test* test-form))
     (eval test-form)))
+  
+(define-condition failed-same-test (failed-test)
+  ((explenation :initform "a form containing 'same failed to return both the same values.  check received value and expected value for the resulting forms.")
+   (received-value :initarg :received
+                   :reader received-value)
+   (expected-value :initarg :expected
+                   :reader expected-value)))
+
+(defmethod print-object ((err failed-same-test) stream)
+  (print-unreadable-object (err stream)
+    (format stream "~& Explenation: ~A~& Test: ~A~& Complete test: ~A~& Received: ~A~& Expected: ~A~&" (explenation err) (test-form err) (complete-test err) (received-value err) (expected-value err))))
+  
+(defmacro same (expected-value form)
+  "verifies that form returns a value which appears to be equal to the expected value."
+  (let ((g-returned-value (gensym))
+        (g-expected-value (gensym)))
+    `(let ((,g-returned-value ,form)
+           (,g-expected-value ,expected-value))
+       (unless (equal ,g-returned-value ,g-expected-value)
+         (error 'failed-same-test
+                :test (quote ,form)
+                :complete-test *complete-test*
+                :expected ,g-expected-value
+                :received ,g-returned-value)))))
 
 (defun test-function* (symbol &rest tests)
   "runs all tests in <tests> for the function denoted by symbol <symbol>"

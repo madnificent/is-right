@@ -68,7 +68,7 @@ the asdf definition describes a separate file which will contain the package.  f
     (:export :is :is-right :is-right*
              :test :rm-tests
              :test-all :test-package :test-function
-             :failed-test :failed-is-test))
+             :failed-test :failed-is-test :failed-same-test))
 #+end_src
 
 *** lisp source
@@ -215,13 +215,13 @@ in order to make the system work, we introduce a new error-class which is to be 
                     :reader complete-test))
     (:documentation "error which is thrown when a test fails to execute"))
   
-  (define-condition failed-is-test (failed-test)
-    ((explenation :initform "a form containing 'is failed to return a non-nil value."))
-    (:documentation "error which is thrown when an is-test failed to return a non-nil value."))
-  
   (defmethod print-object ((object failed-test) stream)
     (print-unreadable-object (object stream)
       (format stream "~& Explenation: ~A~& Test: ~A~& Complete test: ~A~&" (explenation object) (test-form object) (complete-test object))))
+  
+  (define-condition failed-is-test (failed-test)
+    ((explenation :initform "a form containing 'is failed to return a non-nil value."))
+    (:documentation "error which is thrown when an is-test failed to return a non-nil value."))
   
 #+end_src
 
@@ -239,7 +239,9 @@ as the test requires both the complete test, as the form on which the test faile
 #+begin_src lisp
   
   (defmacro is (form)
-    "verifies that form returns a non-nil value."
+    "verifies that form returns a non-nil value.
+
+     the implementation of this macro is shadowed in is-right*"
     `(unless ,form
        (error 'failed-is-test
               :test (quote ,form)
@@ -256,6 +258,48 @@ with this 'is macro defined, we've reached the need to execute a particular test
     (let ((*complete-test* test-form))
       (eval test-form)))
 
+#+end_src
+
+**** adding test verification constructions
+with the if construction defined, it's relatively simple to construct other checks based on the same structure.  these new checks amount to a simpler, clearer definition of the tests themselves.
+
+***** same
+the same construction tests for equality between its first and its second form.
+
+as a first step a new error is constructed which will manage the error-reporting towards the end-user.
+
+#+begin_src lisp
+    
+  (define-condition failed-same-test (failed-test)
+    ((explenation :initform "a form containing 'same failed to return both the same values.  check received value and expected value for the resulting forms.")
+     (received-value :initarg :received
+                     :reader received-value)
+     (expected-value :initarg :expected
+                     :reader expected-value)))
+  
+  (defmethod print-object ((err failed-same-test) stream)
+    (print-unreadable-object (err stream)
+      (format stream "~& Explenation: ~A~& Test: ~A~& Complete test: ~A~& Received: ~A~& Expected: ~A~&" (explenation err) (test-form err) (complete-test err) (received-value err) (expected-value err))))
+  
+#+end_src
+
+with this error defined, it's simple to create the 'same macro, in the likes of the 'is macro.
+
+#+begin_src lisp
+    
+  (defmacro same (expected-value form)
+    "verifies that form returns a value which appears to be equal to the expected value."
+    (let ((g-returned-value (gensym))
+          (g-expected-value (gensym)))
+      `(let ((,g-returned-value ,form)
+             (,g-expected-value ,expected-value))
+         (unless (equal ,g-returned-value ,g-expected-value)
+           (error 'failed-same-test
+                  :test (quote ,form)
+                  :complete-test *complete-test*
+                  :expected ,g-expected-value
+                  :received ,g-returned-value)))))
+  
 #+end_src
 
 **** executing groups of tests
@@ -350,3 +394,87 @@ this is a trivial test, given the previous tests.  a function to call this progr
   
 #+end_src
 
+** test addition system
+various ways exist to add tests to getright.  the most basic way to add tests is by using 'test.  in order to make testing of functions easier, the is-right construction is introduced, this construction asserts that a certain function call is correct.  is-right and is-right* are two macro's which will take care of this.
+
+*** conceptual idea
+in its basic concept is-right adds tests to the current set of tests under the assumption that their current implementation is correct.  for this to happen the system builds a test based on the current implementation of the function, and adds the test to a separate file.  this makes the creation of tests relatively simple.
+
+for this to work, the construction is split in various parts.  the first part makes it possible to assert that a function is currently implemented correctly for a specific function call.  verification of this is done by creating a function which takes a form and converts the form to a test case.
+
+secondly a system is defined which specifies where tests should be stored.  this is an extensible system which must be informed about the locations where test cases should be stored in and retrieved from.
+
+lastly, the constructions of the previous two sections are distilled into a working format for the end-user.  later on, this will be extended to display a nicer implementation.
+
+*** assert function calls
+when a function call is currently correct, we may want to prefer to add it to the system.  in order to add this, the function must be executed and its value must be computed.  by using the name of the function and the value which it currently has, we can distill the needed information.
+
+**** simplistic implementation
+in its most simplistic implementation we receive the function that is to be tested.  furthermore a functioncall is provided to indicate the test function itself.
+
+#+begin_src lisp
+  
+  (defun make-test-for-function-execution (function form)
+    "creates a test for the function execution of form"
+    (let ((execution-value (eval form)))
+      `(test ,function (same ,execution-value ,form))))
+  
+#+end_src
+
+**** implementation with automatic symbol definition
+the symbol of the function which is being called can be verified quite simply in case the function is called immediately.  as this is the support which is-right provides, we create a function for this.
+
+#+begin_src lisp
+  
+  (defun make-get-right-test (form &optional form-when-test-overridden)
+    "returns a test-form for the test which can be constructed from the current execution of form"
+    (let* ((function-form (if form-when-test-overridden
+                              form-when-test-overridden
+                              form))
+           (function-symbol (if form-when-test-overridden
+                                form
+                                (first function-form))))
+      (make-test-for-function-execution function-symbol function-form)))
+  
+#+end_src
+
+in case get-right* is being used, we need to figure out which form is being tested by walking over the constructions of the form.  the form which is being tested is wrapped in a form with first name 'is.
+
+be warned though, this construction isn't exactly correct.  it (wrongly) assumes that is will not be used for other forms.  furthermore it assumes that there's only a single is test in the form, which again, might be erroneous.
+
+#+begin_src lisp
+  
+  (defun make-get-right*-test (form &optional form-when-test-overridden)
+    (let* ((function-form (if form-when-test-overridden
+                              form-when-test-overridden
+                              form))
+           (function-symbol (when form-when-test-overridden
+                              form)))
+      (labels ((get-function-value (form)
+                 (if (listp form)
+                     (if (eq (first form) 'is)
+                         (second form)
+                         (loop for expression in form
+                            collect (get-function-value expression)))
+                     form)))
+        (let ((execution-value (eval (get-function-value function-form))))
+          (labels ((walk-get-right-form (form)
+                     (if (eq (first form) 'is)
+                         ;; translate if-form
+                         (let ((function-form (second form)))
+                           (setf function-symbol
+                                 (or function-symbol (first function-form)))
+                           `(same ,execution-value ,function-form))
+                         ;; walk other forms
+                         (loop for expression in form
+                            collect (if (listp expression)
+                                        (walk-get-right-form expression)
+                                        expression)))))
+            (let ((new-form (walk-get-right-form function-form)))
+              `(test (quote ,function-symbol)
+                     (quote ,new-form))))))))
+  
+#+end_src
+
+*** file registry for tests
+*** spray some sugar

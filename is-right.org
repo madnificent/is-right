@@ -68,7 +68,8 @@ the asdf definition describes a separate file which will contain the package.  f
     (:export :is :is-right :is-right*
              :test :rm-tests
              :test-all :test-package :test-function
-             :failed-test :failed-is-test :failed-same-test))
+             :failed-test :failed-is-test :failed-same-test
+             :mk-package-test-file))
 #+end_src
 
 *** lisp source
@@ -83,6 +84,8 @@ for starters, everything is specified in the is-right package.
   (in-package :is-right)
 
   <<unit-test-system>>
+
+  <<test-additions>>
   
 #+end_src
 
@@ -115,7 +118,7 @@ this is a relatively simple problem, but it gives rise to a host of problems, as
   (defun distill-function-information (function-symbol)
     "tries to distill the package and the symbol representing the function from <function-symbol> this is only guaranteed to work when function-symbol is a symbol, yet we try to solve it non-portably, when function-symbol is a function as well.
   
-     unless an error is signaled, this function returns two values.  both of the values are symbols.  the first value is a symbol representing the function, the second value is a symbol representing the package."
+     unless an error is signaled, this function returns two values.  the first value is a symbol representing the function, the second value is the package of the symbol."
     (setf function-symbol
           (cond ((functionp function-symbol)
                  (let ((symbol
@@ -179,18 +182,20 @@ the tests for a specific package are returned as a plist which, for each functio
   
 #+end_src
 
-**** removing tests for a function
-during test debugging it may be handy to remove the tests for a particular function, this can be done by calling the following function.
+**** removing tests for a function or package
+when a file containing tests is read, all tests for that package are removed.  a function is created which removes the tests when a package is supplied.  if the function is supplied with a symbol, the tests for the function resembling that symbol are removed.
 
 #+begin_src lisp
   
-  (defun rm-tests (function-symbol)
-    "removes the tests for the given function"
-    (multiple-value-bind (function-symbol package)
-        (distill-function-information function-symbol)
-      (setf (getf (getf *unit-tests* package)
-                  function-symbol)
-            nil)))
+  (defun rm-tests (function-or-package)
+    "removes the tests for the given package or function"
+    (if (symbolp function-or-package)
+        (multiple-value-bind (function-symbol package)
+            (distill-function-information function-or-package)
+          (setf (getf (getf *unit-tests* package)
+                      function-symbol)
+                nil))
+        (setf (getf *unit-tests* function-or-package) nil)))
   
 #+end_src
 
@@ -395,6 +400,9 @@ this is a trivial test, given the previous tests.  a function to call this progr
 #+end_src
 
 ** test addition system
+:PROPERTIES:
+:noweb-ref: test-additions
+:END:
 various ways exist to add tests to getright.  the most basic way to add tests is by using 'test.  in order to make testing of functions easier, the is-right construction is introduced, this construction asserts that a certain function call is correct.  is-right and is-right* are two macro's which will take care of this.
 
 *** conceptual idea
@@ -417,7 +425,7 @@ in its most simplistic implementation we receive the function that is to be test
   (defun make-test-for-function-execution (function form)
     "creates a test for the function execution of form"
     (let ((execution-value (eval form)))
-      `(test ,function (same ,execution-value ,form))))
+      `(test ',function (same ',execution-value ,form))))
   
 #+end_src
 
@@ -434,7 +442,8 @@ the symbol of the function which is being called can be verified quite simply in
            (function-symbol (if form-when-test-overridden
                                 form
                                 (first function-form))))
-      (make-test-for-function-execution function-symbol function-form)))
+      (values (make-test-for-function-execution function-symbol function-form)
+              function-symbol)))
   
 #+end_src
 
@@ -464,17 +473,151 @@ be warned though, this construction isn't exactly correct.  it (wrongly) assumes
                          (let ((function-form (second form)))
                            (setf function-symbol
                                  (or function-symbol (first function-form)))
-                           `(same ,execution-value ,function-form))
+                           `(same ',execution-value ,function-form))
                          ;; walk other forms
                          (loop for expression in form
                             collect (if (listp expression)
                                         (walk-get-right-form expression)
                                         expression)))))
             (let ((new-form (walk-get-right-form function-form)))
-              `(test (quote ,function-symbol)
-                     (quote ,new-form))))))))
+              (values `(test (quote ,function-symbol)
+                             (quote ,new-form))
+                      function-symbol)))))))
   
 #+end_src
 
 *** file registry for tests
+as the forms which need to be executed to perform the tests on a certain function can be created from the function call in itself, it's important that the test cases can also be stored.  as many functions may need to be stored, the system created here stores the set of test cases in a per-package manner.
+
+for each package, a file can be defined.  each test which is constructed on a function which resides in that package, will be stored in that file.  this way, the tests for a certain package are discoverable by the user and can be edited with relative ease.
+
+**** finding and specifying package test paths
+if we're going to remember where tests need to be placed, we need to store that information somewhere.  this is described in this section.
+
+we store the packages and their related variables in a plist, as it provides the simplest storage at the moment.
+#+begin_src lisp
+  
+  (defvar *package-files* nil
+    "a plist which contains the package as key and for each package for which the location where the tests need to be stored is known, the path to that file.")
+  
+#+end_src
+
+as the files where the tests reside will need to be get and set, functions are introduced to update the *package-files* variable.
+
+#+begin_src lisp
+  
+  (defun packagetests-file (package)
+    "setfable place for the file in which the package tests are defined, or nil if such a file is not known."
+    (unless (packagep package)
+      (setf package (find-package package)))
+    (getf *package-files* package))
+  
+  (defun (setf packagetests-file) (file package)
+    (unless (packagep package)
+      (setf package (find-package package)))
+    (setf (getf *package-files* package)
+          file))
+  
+#+end_src
+
+**** ensuring test storage exists
+when we discover a new test file and want to read in those sources, we need to ensure that the file exists.  if the file doesn't exist, we create the file and setup some standard information about it.
+
+#+begin_src lisp
+  
+  (defun ensure-packagetest-file (file package-symbol)
+    "checks whether or not file exists. if the file doesn't exist an initial declaration is added which will clear the known tests from the current system when interpreted."
+    (setf (packagetests-file package-symbol) file)
+    (unless (probe-file file)
+      (with-open-file (out file :direction :output)
+        (write `(rm-tests (find-package ',package-symbol)) :stream out)
+        (format out "~&~%"))))
+  
+#+end_src
+
+**** extending the tests in storage
+when new tests are added, they should be added to the test storage as well.  this basically means that we must find the file in which the package is described and that we must append the test to that file.  the function assumes that the symbol representing the function is known, thus making it easy to find the filename to write to.  in case no file is found an error is thrown.
+
+#+begin_src lisp
+  
+  (defun add-test-to-file (function form)
+    "adds <form>, which is a complete test for function <function>, to the files which are known."
+    (with-open-file (out (packagetests-file (nth-value 1 (distill-function-information function)))
+                         :direction :output
+                         :if-exists :append)
+      (write form :stream out)
+      (format out "~&~%")))
+  
+#+end_src
+
+
 *** spray some sugar
+this section describes functions which have been introduced to make it easier on the end-user to use this system.
+
+**** specifying package test files
+on various occasions will the user specify the files in which tests for a particular class of functions ought to be placed.  this is done through the mk-package-test-file function.
+
+#+begin_src lisp
+  
+  (defun mk-package-test-file (package-symbol file)
+    "ensures that a package test file for package-symbol exists and is located in file.  furthermore ensures that the system knows the file for further additions.  it also reads the contents of the file, so the tests can be interpreted."
+    (ensure-packagetest-file file package-symbol)
+    (setf (packagetests-file package-symbol) file)
+    (load file))
+  
+#+end_src
+
+**** automatically adding tests
+is-right allows you to add tests to the system and to the package file.  simply calling is-right will ensure that the information is available in there.
+
+#+begin_src lisp
+  
+  (defmacro is-right (form &optional form-when-symbol-overridden)
+    "adds the test for form to the set of tests for the given function"
+    (multiple-value-bind (test func)
+        (make-get-right-test form form-when-symbol-overridden)
+      (add-test-to-file func test)
+      test))
+  
+#+end_src
+
+is-right* is similar, but better.  it allows for the definition of tests in a specific environment.  the setup is extremely similar.
+
+#+begin_src lisp
+  
+  (defmacro is-right* (form &optional form-when-symbol-overridden)
+    (multiple-value-bind (test func)
+        (make-get-right*-test form form-when-symbol-overridden)
+      (add-test-to-file func test)
+      test))
+  
+#+end_src
+
+
+* testing is-right in is-right
+:PROPERTIES:
+:tangle: is-right-tests.lisp
+:END:
+is-right can be tested within itself, this is rather cool!
+
+** managing the test sources
+for this we create an is-right-tests package and add the code in the same file.
+
+#+begin_src lisp
+  
+  (cl:defpackage :is-right-tests
+    (:use :cl :is-right :asdf))
+  
+  (cl:in-package :is-right-tests)
+  
+#+end_src
+
+** storing tests for is-right
+the tests for is-right are stored in a file named is-right-packagetests.lisp , relative to the is-right system.  this is the second thing we configure for is-right-tests
+
+#+begin_src lisp
+  
+  (mk-package-test-file :is-right
+                        (asdf:system-relative-pathname :is-right "is-right-packagetests.lisp"))
+  
+#+end_src

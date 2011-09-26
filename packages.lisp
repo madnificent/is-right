@@ -4,4 +4,5 @@
   (:export :is :is-right :is-right*
            :test :rm-tests
            :test-all :test-package :test-function
-           :failed-test :failed-is-test :failed-same-test))
+           :failed-test :failed-is-test :failed-same-test
+           :mk-package-test-file))

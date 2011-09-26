@@ -8,7 +8,7 @@
 (defun distill-function-information (function-symbol)
   "tries to distill the package and the symbol representing the function from <function-symbol> this is only guaranteed to work when function-symbol is a symbol, yet we try to solve it non-portably, when function-symbol is a function as well.
 
-   unless an error is signaled, this function returns two values.  both of the values are symbols.  the first value is a symbol representing the function, the second value is a symbol representing the package."
+   unless an error is signaled, this function returns two values.  the first value is a symbol representing the function, the second value is the package of the symbol."
   (setf function-symbol
         (cond ((functionp function-symbol)
                (let ((symbol
@@ -46,13 +46,15 @@
     (setf package (find-package package)))
   (getf *unit-tests* package))
 
-(defun rm-tests (function-symbol)
-  "removes the tests for the given function"
-  (multiple-value-bind (function-symbol package)
-      (distill-function-information function-symbol)
-    (setf (getf (getf *unit-tests* package)
-                function-symbol)
-          nil)))
+(defun rm-tests (function-or-package)
+  "removes the tests for the given package or function"
+  (if (symbolp function-or-package)
+      (multiple-value-bind (function-symbol package)
+          (distill-function-information function-or-package)
+        (setf (getf (getf *unit-tests* package)
+                    function-symbol)
+              nil))
+      (setf (getf *unit-tests* function-or-package) nil)))
 
 (define-condition failed-test (error)
   ((test :initarg :test
@@ -160,3 +162,102 @@
           (format T "~&~%")
           (apply #'test-package* package fplist)
           (format T "~&~%==============================~&"))))
+
+
+
+(defun make-test-for-function-execution (function form)
+  "creates a test for the function execution of form"
+  (let ((execution-value (eval form)))
+    `(test ',function (same ',execution-value ,form))))
+
+(defun make-get-right-test (form &optional form-when-test-overridden)
+  "returns a test-form for the test which can be constructed from the current execution of form"
+  (let* ((function-form (if form-when-test-overridden
+                            form-when-test-overridden
+                            form))
+         (function-symbol (if form-when-test-overridden
+                              form
+                              (first function-form))))
+    (values (make-test-for-function-execution function-symbol function-form)
+            function-symbol)))
+
+(defun make-get-right*-test (form &optional form-when-test-overridden)
+  (let* ((function-form (if form-when-test-overridden
+                            form-when-test-overridden
+                            form))
+         (function-symbol (when form-when-test-overridden
+                            form)))
+    (labels ((get-function-value (form)
+               (if (listp form)
+                   (if (eq (first form) 'is)
+                       (second form)
+                       (loop for expression in form
+                          collect (get-function-value expression)))
+                   form)))
+      (let ((execution-value (eval (get-function-value function-form))))
+        (labels ((walk-get-right-form (form)
+                   (if (eq (first form) 'is)
+                       ;; translate if-form
+                       (let ((function-form (second form)))
+                         (setf function-symbol
+                               (or function-symbol (first function-form)))
+                         `(same ',execution-value ,function-form))
+                       ;; walk other forms
+                       (loop for expression in form
+                          collect (if (listp expression)
+                                      (walk-get-right-form expression)
+                                      expression)))))
+          (let ((new-form (walk-get-right-form function-form)))
+            (values `(test (quote ,function-symbol)
+                           (quote ,new-form))
+                    function-symbol)))))))
+
+(defvar *package-files* nil
+  "a plist which contains the package as key and for each package for which the location where the tests need to be stored is known, the path to that file.")
+
+(defun packagetests-file (package)
+  "setfable place for the file in which the package tests are defined, or nil if such a file is not known."
+  (unless (packagep package)
+    (setf package (find-package package)))
+  (getf *package-files* package))
+
+(defun (setf packagetests-file) (file package)
+  (unless (packagep package)
+    (setf package (find-package package)))
+  (setf (getf *package-files* package)
+        file))
+
+(defun ensure-packagetest-file (file package-symbol)
+  "checks whether or not file exists. if the file doesn't exist an initial declaration is added which will clear the known tests from the current system when interpreted."
+  (setf (packagetests-file package-symbol) file)
+  (unless (probe-file file)
+    (with-open-file (out file :direction :output)
+      (write `(rm-tests (find-package ',package-symbol)) :stream out)
+      (format out "~&~%"))))
+
+(defun add-test-to-file (function form)
+  "adds <form>, which is a complete test for function <function>, to the files which are known."
+  (with-open-file (out (packagetests-file (nth-value 1 (distill-function-information function)))
+                       :direction :output
+                       :if-exists :append)
+    (write form :stream out)
+    (format out "~&~%")))
+
+(defun mk-package-test-file (package-symbol file)
+  "ensures that a package test file for package-symbol exists and is located in file.  furthermore ensures that the system knows the file for further additions.  it also reads the contents of the file, so the tests can be interpreted."
+  (ensure-packagetest-file file package-symbol)
+  (setf (packagetests-file package-symbol) file)
+  (load file))
+
+(defmacro is-right (form &optional form-when-symbol-overridden)
+  "adds the test for form to the set of tests for the given function"
+  (multiple-value-bind (test func)
+      (make-get-right-test form form-when-symbol-overridden)
+    (add-test-to-file func test)
+    test))
+
+(defmacro is-right* (form &optional form-when-symbol-overridden)
+  (multiple-value-bind (test func)
+      (make-get-right*-test form form-when-symbol-overridden)
+    (add-test-to-file func test)
+    test))

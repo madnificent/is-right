@@ -52,3 +52,18 @@
                    (loop for y from 0 below x
                          collect y)))))))
 
+(test 'is-right::make-get-right*-test
+      (is-right::same
+       '(test 'apply
+              '(let ((x 4))
+                 (is-right::same '6
+                                 (apply #'+
+                                        (loop for y from 0 below x
+                                              collect y)))))
+       (is-right::make-get-right*-test
+        '(let ((x 4))
+           (is
+            (apply #'+
+                   (loop for y from 0 below x
+                         collect y)))))))
+

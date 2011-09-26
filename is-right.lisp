@@ -112,7 +112,8 @@
                 :test (quote ,form)
                 :complete-test *complete-test*
                 :expected ,g-expected-value
-                :received ,g-returned-value)))))
+                :received ,g-returned-value))
+       ,g-returned-value)))
 
 (defun test-function* (symbol &rest tests)
   "runs all tests in <tests> for the function denoted by symbol <symbol>"
@@ -187,28 +188,33 @@
                             form))
          (function-symbol (when form-when-test-overridden
                             form)))
-    (labels ((get-function-value (form)
-               (if (listp form)
-                   (if (eq (first form) 'is)
-                       (second form)
-                       (loop for expression in form
-                          collect (get-function-value expression)))
-                   form)))
-      (let ((execution-value (eval (get-function-value function-form))))
+    (let ((execution-values nil))
+      (labels ((get-function-values (form)
+                 (if (listp form)
+                     (if (eq (first form) 'is)
+                         `(push ,(second form)
+                                execution-values)
+                         (loop for expression in form
+                            collect (get-function-values expression)))
+                     form)))
+        (setf execution-values
+              (reverse (eval `(let ((execution-values nil))
+                                ,(get-function-values function-form)
+                                execution-values))))
         (labels ((walk-get-right-form (form)
                    (if (eq (first form) 'is)
                        ;; translate if-form
                        (let ((function-form (second form)))
                          (setf function-symbol
                                (or function-symbol (first function-form)))
-                         `(same ',execution-value ,function-form))
+                         `(same ',(pop execution-values) ,function-form))
                        ;; walk other forms
                        (loop for expression in form
                           collect (if (listp expression)
                                       (walk-get-right-form expression)
                                       expression)))))
           (let ((new-form (walk-get-right-form function-form)))
-            (values `(test (quote ,function-symbol)
+            (values `(test ',function-symbol
                            (quote ,new-form))
                     function-symbol)))))))
 

@@ -65,11 +65,13 @@ the asdf definition describes a separate file which will contain the package.  f
 #+begin_src lisp
   (defpackage :is-right
     (:use :common-lisp)
-    (:export :is :is-right :is-right*
+    (:export :is :same :is-right :is-right*
              :test :rm-tests
              :test-all :test-package :test-function
              :failed-test :failed-is-test :failed-same-test
-             :mk-package-test-file))
+             :mk-package-test-file
+             :print-mock-object :print-form :print-subform
+             :make-print-form :make-mock-print-form))
 #+end_src
 
 *** lisp source
@@ -145,7 +147,7 @@ in order to add a test, the test-form is added to the respective plist. the plis
   
   (defun test (function test-form)
     "test-function is the function version to add tests to the is-right test framework.
-     function is expected to be the function which will be tested.  only the symbol of th function is supported portably.
+     function is expected to be the function which will be tested.  only the symbol of the function is supported portably.
      test-form is the form which will be executed as a test for the given function."
     (multiple-value-bind (function-symbol package)
         (distill-function-information function)
@@ -415,6 +417,177 @@ secondly a system is defined which specifies where tests should be stored.  this
 
 lastly, the constructions of the previous two sections are distilled into a working format for the end-user.  later on, this will be extended to display a nicer implementation.
 
+*** writable result translate
+in this section the results of various functions will be calculated.  the results of these objects can't always be written to the stream by using write, therefore we introduce a new system for writing objects when they need to be used in test-cases.
+
+note: some study time has come round to ensure that Common Lisp doesn't provide an architecture for this usage.  there is an equivalent system for constructing forms which can be /read/ correctly, but that doesn't constitute forms which need to abide evaluatability.  as such a small new system is introduced for this usecase.
+
+**** conceptual
+we need to introduce a new read system and it would be preferred if we'd be able to introduce this system in a way that's reusable to some extent.  for this reason a multi-layered system is introduced.  each layer introduces a broader, yet less ideas solution to the problem.  the layers themselves are constructed in a class hierarchy, which should allow them to be extended in other systems which need printing.
+
+- print-mock-object :: print-mock-object is the most applicable method.  the method tries to print the object in a way suited for mocking.  the object representing the printing through print-mock-object receives the object which must make the printing work as well.
+- print-form :: print-form is the most usable broad level object.  it returns a list which, when evaluated, returns an object equivalent to the object given to it.  it doesn't allow for fine-grained control over the objects which are to be printed and as such, it is more generic.
+- print-object :: as a last resort, we back out to print-object.  this basically means that the current system doesn't know how to print the given object and that we're doing a best effort to read it anyways.
+
+for later to become historical reasons the name printing is used erroneously here.  when we print an object, we return an s-expression that, when evaluated, will yield an object with the properties which have been talked about.
+
+**** implementation approach
+in order to make all this work seamlessly something is needed which expresses how the thing ought to have been printed if more information was available.  this could be done by creating an extensive object oriented system.  on the other hand, we don't want to burden the user with all sorts of uninteresting oddities, we want the user to have a clean interface in which he can specify how the objects ought to be printed.  for this reason the implementation of the system itself is layered in two systems as well.  the lower-level system dirigates the control flow through each of the print-functions, the higher-level system provides implementations of each of the plotting levels.  in this system the existence of a more applicable system gains absolute preference over the existence of an implementation of a less ideal method.
+
+the methods which the user implements should never be called by the user himself.  when the user needs to print a form, he needs to call the /print-subform/ which will make sure that the order in which each of the forms had been called, is still correct.  for instance, if the upper-level printing mechanism isn't interested in printing mock objects, then it will only try to use print-form and print-object.  adding such flexibility makes it easier to print objects for various causes later on (thus promoting reusability if this library would split off from is-right.
+
+
+**** user visible generic functions
+as described earlier, the user has various generic methods at his disposal which he should use to print the objects.  some of these generic functions are for him to implement, a single other is for him to use.  for each printing option, a regular function will be used to control the printing itself, that regular function is defined later on, as syntactic sugar.  this section also provides the generic definition of /print-subform/, which will be used when the user implements one of the other methods.
+
+#+begin_src lisp
+  
+  (defgeneric print-subform (object)
+    (:documentation "when you use this system and you need to print an instance which isn't directly related to yourself, you should call the print-subform method on that object.  this will ensure that the correct order of execution is used."))
+  
+  (defgeneric print-mock-object (function object)
+    (:documentation "prints a mock object for the given function.  this allows you to load only a specific aspect of the object for the given function."))
+  
+  (defgeneric print-form (object)
+    (:documentation "adds an s-expression, which, when evaluated, will yield an equivalent object."))
+    
+#+end_src
+
+**** backend classes
+the backend consists of various classes, each representing a way to print objects generically.  through the use of subclassing and method specialisation, the order of, and exact method calls for, the various levels can be specified.
+
+let's define the classes for each of the three currently defined print levels first.
+
+#+begin_src lisp
+  
+  (defclass base-printlevel ()
+    ()
+    (:documentation "base class for the printing of instances."))
+  
+  (defclass form-printlevel (base-printlevel)
+    ()
+    (:documentation "prints the objects so reading/evaluating them will result in an equivalent object."))
+  
+  (defclass mock-printlevel (form-printlevel)
+    ((test-function-symbol :initform nil
+                           :initarg :test-function-symbol
+                           :reader test-function-symbol))
+    (:documentation "prints the instance so that reading/evaluating them will result in an object which has all the needed similarities for the given test."))
+  
+#+end_src
+
+these levels will be passed to the various functions by the use of a parameter, called *current-printlevel*.
+
+#+begin_src lisp
+  
+  (defparameter *current-printlevel* nil
+    "variable which is shadowed when printing occurs, so print-subform can call the correct toplevel function.")
+  
+#+end_src
+
+in case a certain level of printing has been implemented for a superclass of the current class, but shouldn't be implemented for the current class, an error indicating this is thrown to indicate this.  this error, and the implementation for each of the defined methods is specified here.
+
+#+begin_src lisp
+  
+  (define-condition unsupported-printlevel (error)
+    ()
+    (:documentation "indicates that the printlevel was not supported for the given objects"))
+  
+  (defmethod print-mock-object (function object)
+    (error 'unsupported-printlevel))
+  (defmethod print-form (object)
+    (error 'unsupported-printlevel))
+  
+#+end_src
+
+furthermore, we need a single generic function which dictates how each level ought to be printed, based on the current printlevel.
+
+#+begin_src lisp
+  
+  (defgeneric call-printlevel (printlevel object)
+    (:documentation "prints the object in the given printlevel"))
+  
+  (defmethod call-printlevel ((printlevel base-printlevel) object)
+    object)
+  
+  (defmethod call-printlevel :around ((printlevel form-printlevel) object)
+    (handler-case
+        (print-form object)
+      (unsupported-printlevel ()
+        (call-next-method))))
+  
+  (defmethod call-printlevel :around ((printlevel mock-printlevel) object)
+    (handler-case
+        (print-mock-object (test-function-symbol printlevel)
+                           object)
+      (unsupported-printlevel ()
+        (call-next-method))))
+  
+#+end_src
+
+**** how to start the printing
+with this system in place, we still need to define how one can start printing the objects.  for each of the currently defined levels, a function will be introduced to indicate the start of the printing.  each of these functions calls a generic function to handle the setup of the printing environment.  aside from this, the standard (and only) implementation of the #'print-subform generic function is implemented.
+
+#+begin_src lisp
+  
+  (defun boot-printing (printlevel object)
+    "boots the printing of any currently known printlevel.  the printlevel-specific functions use this."
+    (let ((*current-printlevel* printlevel))
+      (call-printlevel printlevel object)))
+  
+  (defun make-print-form (object)
+    "prints the object as a form through the print-form generic function."
+    (boot-printing (make-instance 'form-printlevel)
+                   object))
+  
+  (defun make-mock-print-form (object function)
+    "prints the object as a mock object through the print-mock-object generic function"
+    (boot-printing (make-instance 'mock-printlevel
+                                  :test-function-symbol function)
+                   object))
+  
+#+end_src
+
+the printing of subforms is still to be implemented.  this is a relatively simple function though, as we have access to the global printlevel object.
+
+#+begin_src lisp
+  
+  (defmethod print-subform (object)
+    (boot-printing *current-printlevel* object))
+  
+#+end_src
+
+**** implement basic functions
+lists don't respond correctly to being printed through print-object, as the list needs to be quoted.  the same issue holds for sequences and such.
+
+#+begin_src lisp
+  
+  (defun pure-list-p (cons-cell)
+    (when (listp cons-cell)
+      (loop for (a . b) on cons-cell
+         unless (listp b) return nil
+         collect a)))
+  
+  (defmethod print-form ((cell cons))
+    (if (pure-list-p cell)
+        (cons 'list (loop for item in cell collect (print-subform item)))
+        `(cons ,(print-subform (car cell))
+               ,(print-subform (cdr cell)))))
+  
+  (defmethod print-form ((seq sequence))
+    ;; TODO: make this correct, you want everything of the normal array, but not the element-type
+    (let ((new-array
+           (make-array (array-dimensions seq))))
+      (loop for i from 0 below (length seq)
+         do (setf (elt new-array i)
+                  (print-subform (elt seq i))))
+      `(quote ,new-array)))
+  
+  (defmethod print-form ((symbol symbol))
+    `(quote ,symbol))
+  
+#+end_src
+
 *** assert function calls
 when a function call is currently correct, we may want to prefer to add it to the system.  in order to add this, the function must be executed and its value must be computed.  by using the name of the function and the value which it currently has, we can distill the needed information.
 
@@ -426,7 +599,7 @@ in its most simplistic implementation we receive the function that is to be test
   (defun make-test-for-function-execution (function form)
     "creates a test for the function execution of form"
     (let ((execution-value (eval form)))
-      `(test ',function (same ',execution-value ,form))))
+      `(test ',function (same ,(make-mock-print-form execution-value function) ,form))))
   
 #+end_src
 
@@ -464,7 +637,12 @@ be warned though, this construction isn't exactly correct.  it (wrongly) assumes
         (labels ((get-function-values (form)
                    (if (listp form)
                        (if (eq (first form) 'is)
-                           `(push ,(second form)
+                           `(push (make-mock-print-form
+                                   ,(second form)
+                                   ',(or function-symbol
+                                         (if (listp (second form))
+                                             (first (second form))
+                                             (second form))))
                                   execution-values)
                            (loop for expression in form
                               collect (get-function-values expression)))
@@ -479,7 +657,7 @@ be warned though, this construction isn't exactly correct.  it (wrongly) assumes
                          (let ((function-form (second form)))
                            (setf function-symbol
                                  (or function-symbol (first function-form)))
-                           `(same ',(pop execution-values) ,function-form))
+                           `(same ,(pop execution-values) ,function-form))
                          ;; walk other forms
                          (loop for expression in form
                             collect (if (listp expression)
@@ -536,8 +714,10 @@ when we discover a new test file and want to read in those sources, we need to e
     (setf (packagetests-file package-symbol) file)
     (unless (probe-file file)
       (with-open-file (out file :direction :output)
-        (write `(rm-tests (find-package ',package-symbol)) :stream out)
-        (format out "~&~%"))))
+        (let ((*package* (find-package package-symbol)))
+          (write `(cl:in-package ,package-symbol))
+          (write `(is-right:rm-tests (cl:find-package ',package-symbol)) :stream out :readably t)
+          (format out "~&~%")))))
   
 #+end_src
 
@@ -548,11 +728,13 @@ when new tests are added, they should be added to the test storage as well.  thi
   
   (defun add-test-to-file (function form)
     "adds <form>, which is a complete test for function <function>, to the files which are known."
-    (with-open-file (out (packagetests-file (nth-value 1 (distill-function-information function)))
-                         :direction :output
-                         :if-exists :append)
-      (write form :stream out)
-      (format out "~&~%")))
+    (let ((package (nth-value 1 (distill-function-information function))))
+      (with-open-file (out (packagetests-file package)
+                          :direction :output
+                          :if-exists :append)
+        (let ((*package* package))
+          (write form :stream out :readably t)
+          (format out "~&~%")))))
   
 #+end_src
 

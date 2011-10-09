@@ -266,7 +266,7 @@
 (defun make-test-for-function-execution (function form)
   "creates a test for the function execution of form"
   (let ((execution-value (eval form)))
-    `(test ',function (same ,(make-mock-print-form execution-value function) ,form))))
+    `(test ',function '(same ,(make-mock-print-form execution-value function) ,form))))
 
 (defun make-get-right-test (form &optional form-when-test-overridden)
   "returns a test-form for the test which can be constructed from the current execution of form"
@@ -341,7 +341,7 @@
   (unless (probe-file file)
     (with-open-file (out file :direction :output)
       (let ((*package* (find-package package-symbol)))
-        (write `(cl:in-package ,package-symbol))
+        (write `(cl:in-package ,package-symbol) :stream out :readably t)
         (write `(is-right:rm-tests (cl:find-package ',package-symbol)) :stream out :readably t)
         (format out "~&~%")))))
 

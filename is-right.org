@@ -599,7 +599,7 @@ in its most simplistic implementation we receive the function that is to be test
   (defun make-test-for-function-execution (function form)
     "creates a test for the function execution of form"
     (let ((execution-value (eval form)))
-      `(test ',function (same ,(make-mock-print-form execution-value function) ,form))))
+      `(test ',function '(same ,(make-mock-print-form execution-value function) ,form))))
   
 #+end_src
 
@@ -715,7 +715,7 @@ when we discover a new test file and want to read in those sources, we need to e
     (unless (probe-file file)
       (with-open-file (out file :direction :output)
         (let ((*package* (find-package package-symbol)))
-          (write `(cl:in-package ,package-symbol))
+          (write `(cl:in-package ,package-symbol) :stream out :readably t)
           (write `(is-right:rm-tests (cl:find-package ',package-symbol)) :stream out :readably t)
           (format out "~&~%")))))
   

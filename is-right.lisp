@@ -260,6 +260,9 @@
                 (print-subform (elt seq i))))
     `(quote ,new-array)))
 
+(defmethod print-form ((string string))
+  string)
+
 (defmethod print-form ((symbol symbol))
   `(quote ,symbol))
 

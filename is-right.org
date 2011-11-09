@@ -583,6 +583,9 @@ lists don't respond correctly to being printed through print-object, as the list
                   (print-subform (elt seq i))))
       `(quote ,new-array)))
   
+  (defmethod print-form ((string string))
+    string)
+  
   (defmethod print-form ((symbol symbol))
     `(quote ,symbol))
   

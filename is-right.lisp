@@ -266,6 +266,14 @@
 (defmethod print-form ((symbol symbol))
   `(quote ,symbol))
 
+(defmethod print-form ((table hash-table))
+ `(let ((hash-table (make-hash-table :test ,(print-subform (hash-table-test table)))))
+    ,@(loop for k being the hash-keys in table
+         for v = (gethash k table)
+         collect `(setf (gethash ,k hash-table)
+                        ,(print-subform v)))
+    hash-table))
+
 (defmethod print-form ((object standard-object))
   (let ((class (class-of object)))
     `(make-instance ,(class-name object)

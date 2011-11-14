@@ -77,3 +77,36 @@
             (let ((object '(foo bar baz)))
               (equal object (eval (make-print-form object))))))
 
+(test 'make-print-form
+      '(same
+        (list 'let
+              (list
+               (list 'hash-table
+                     (list 'make-hash-table ':test (list 'quote 'equal))))
+              (list 'setf (list 'gethash "foo" 'hash-table) "bar")
+              (list 'setf (list 'gethash 'epicdb-tests::foo 'hash-table)
+                    "bang")
+              'hash-table)
+        (make-print-form
+         (let ((epicdb-tests::table (make-hash-table :test 'equal)))
+           (setf (gethash "foo" epicdb-tests::table) "bar")
+           (setf (gethash 'epicdb-tests::foo epicdb-tests::table) "bang")
+           epicdb-tests::table))))
+
+(test 'print-form
+      '(let ((epicdb-tests::table (make-hash-table :test 'equal)))
+         (setf (gethash "foo" epicdb-tests::table) "bar")
+         (setf (gethash 'epicdb-tests::foo epicdb-tests::table) "bang")
+         (setf (gethash 'epicdb-tests::baz epicdb-tests::table) nil)
+         (same (list "bar" 't)
+               (multiple-value-list (gethash "foo" epicdb-tests::table)))
+         (same (list "bang" 't)
+               (multiple-value-list
+                (gethash 'epicdb-tests::foo epicdb-tests::table)))
+         (same (list 'nil 't)
+               (multiple-value-list
+                (gethash 'epicdb-tests::baz epicdb-tests::table)))
+         (same (list 'nil 'nil)
+               (multiple-value-list
+                (gethash 'epicdb-tests::bii epicdb-tests::table)))))
+

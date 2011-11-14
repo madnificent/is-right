@@ -588,7 +588,15 @@ lists don't respond correctly to being printed through print-object, as the list
   
   (defmethod print-form ((symbol symbol))
     `(quote ,symbol))
-
+  
+  (defmethod print-form ((table hash-table))
+   `(let ((hash-table (make-hash-table :test ,(print-subform (hash-table-test table)))))
+      ,@(loop for k being the hash-keys in table
+           for v = (gethash k table)
+           collect `(setf (gethash ,k hash-table)
+                          ,(print-subform v)))
+      hash-table))
+  
 #+end_src
 
 **** default class printing

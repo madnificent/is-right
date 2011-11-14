@@ -6,7 +6,7 @@
   :maintainer "Aad Versteden <madnificent@gmail.com>"
   :licence "MIT"
   :description "unit test system which helps the user write tests based on the current implementation of specific functions."
-  :depends-on (cl-ppcre)
+  :depends-on (cl-ppcre closer-mop)
   :serial t
   :components ((:file "packages")
                (:file "is-right")))

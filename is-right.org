@@ -50,7 +50,7 @@ unless otherwise specified, the verification system is published under the MIT l
     :maintainer "Aad Versteden <madnificent@gmail.com>"
     :licence "MIT"
     :description "unit test system which helps the user write tests based on the current implementation of specific functions."
-    :depends-on (cl-ppcre)
+    :depends-on (cl-ppcre closer-mop)
     :serial t
     :components ((:file "packages")
                  (:file "is-right")))
@@ -588,6 +588,24 @@ lists don't respond correctly to being printed through print-object, as the list
   
   (defmethod print-form ((symbol symbol))
     `(quote ,symbol))
+
+#+end_src
+
+**** default class printing
+in many practical cases, classes can be serialized by dumping each bound slot which has an initarg attached to it.  this is obviously a last resort and it will fail on many classes.
+
+#+begin_src lisp
+  
+  (defmethod print-form ((object standard-object))
+    (let ((class (class-of object)))
+      `(make-instance ,(class-name object)
+                      ,@(loop for slot in (closer-mop:class-slots class)
+                           for initarg = (first (closer-mop:slot-definition-initargs slot))
+                           when (and initarg
+                                     (slot-boundp object slot))
+                           append (list initarg
+                                        (print-subform (slot-value object
+                                                                   (closer-mop:slot-definition-name slot))))))))
   
 #+end_src
 

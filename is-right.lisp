@@ -266,6 +266,17 @@
 (defmethod print-form ((symbol symbol))
   `(quote ,symbol))
 
+(defmethod print-form ((object standard-object))
+  (let ((class (class-of object)))
+    `(make-instance ,(class-name object)
+                    ,@(loop for slot in (closer-mop:class-slots class)
+                         for initarg = (first (closer-mop:slot-definition-initargs slot))
+                         when (and initarg
+                                   (slot-boundp object slot))
+                         append (list initarg
+                                      (print-subform (slot-value object
+                                                                 (closer-mop:slot-definition-name slot))))))))
+
 (defun make-test-for-function-execution (function form)
   "creates a test for the function execution of form"
   (let ((execution-value (eval form)))

@@ -294,13 +294,13 @@ with this error defined, it's simple to create the 'same macro, in the likes of 
 
 #+begin_src lisp
     
-  (defmacro same (expected-value form)
+  (defmacro same (expected-value form &key (test 'equal))
     "verifies that form returns a value which appears to be equal to the expected value."
     (let ((g-returned-value (gensym))
           (g-expected-value (gensym)))
       `(let ((,g-returned-value ,form)
              (,g-expected-value ,expected-value))
-         (unless (equal ,g-returned-value ,g-expected-value)
+         (unless (,test ,g-returned-value ,g-expected-value)
            (error 'failed-same-test
                   :test (quote ,form)
                   :complete-test *complete-test*

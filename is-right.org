@@ -1,4 +1,11 @@
-#+BABEL: :tangle no :cache no :session yes :results silent :no-expand yes :noweb yes :exports code :padline yes
+#+property: tangle no
+#+property: cache no
+#+property: session yes
+#+property: results silent
+#+property: no-expand yes
+#+property: noweb yes
+#+property: exports code
+#+property: padline yes
 #+startup: hideblocks overview fninline
 is-right unit test system
 
